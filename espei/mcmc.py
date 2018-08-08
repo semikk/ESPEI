@@ -7,7 +7,6 @@ Affine Invariance. Commun. Appl. Math. Comput. Sci. 5, 65-80 (2010).
 """
 
 import logging, time, sys
-from collections import OrderedDict
 
 import sympy
 import numpy as np
@@ -30,7 +29,7 @@ def lnprob(params, comps=None, dbf=None, phases=None, datasets=None,
     Returns the error from multiphase fitting as a log probability.
     """
     starttime = time.time()
-    parameters = OrderedDict(zip(symbols_to_fit, params))
+    parameters = dict(zip(symbols_to_fit, params))
     try:
         multi_phase_error = calculate_zpf_error(dbf, comps, phases, datasets, phase_models,
                                      parameters=parameters, scheduler=scheduler,
