@@ -29,9 +29,9 @@ def generate_bounds(parameters, factor):
     """
 
     if np.isscalar(factor):
-        bounds = [(p-p*factor, p+p*factor) for p in parameters]
+        bounds = [(p-np.abs(p*factor), p+np.abs(p*factor)) for p in parameters]
     else:
-        bounds = [(p-p*f, p+p*f) for p, f in zip(parameters, factor)]
+        bounds = [(p-np.abs(p*f), p+np.abs(p*f)) for p, f in zip(parameters, factor)]
     return bounds
 
 
