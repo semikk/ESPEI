@@ -96,3 +96,8 @@ mcmc:
       type: boolean
       default: True
       required: True
+    bounds:  # bounds for parameters, should be
+    # 1. A scalar factor applies to all parameters, creates a (min, max) of (p-f*p, p+f*p)
+    # 2. A list of scaling factors for each parameter, as above. User is responsible for order.
+      default: null
+      nullable: True

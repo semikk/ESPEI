@@ -34,6 +34,8 @@ def lnprob(params, comps=None, dbf=None, phases=None, datasets=None,
     if bounds is not None:
         bounds_error = calculate_bounds_error(params, bounds)
         if np.isinf(bounds_error):
+            logging.debug('Bounds exceeded. Total error: {}'.format(bounds_error))
+            logging.debug('lnprob time: {}'.format(time.time() - starttime))
             return -np.inf
     try:
         multi_phase_error = calculate_zpf_error(dbf, comps, phases, datasets, phase_models,
