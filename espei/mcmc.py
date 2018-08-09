@@ -177,7 +177,11 @@ def mcmc_fit(dbf, datasets, iterations=1000, save_interval=100, chains_per_param
     if bounds is not None:
         # check if bounds are not already formatted as lists of tuples
         if not (isinstance(bounds, list) and isinstance(bounds[0], (list, tuple))):
+            logging.debug('Generating bounds from {}'.format(bounds))
             bounds = generate_bounds(initial_parameters, bounds)
+        logging.debug('Using bounds: {}'.format(bounds))
+    else:
+        logging.debug('Not using bounds.')
 
     # context for the log probability function
     error_context = {'comps': comps, 'dbf': dbf,
