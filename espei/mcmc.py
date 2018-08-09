@@ -16,20 +16,25 @@ import emcee
 from pycalphad import Model
 
 from espei.utils import database_symbols_to_fit, optimal_parameters, eq_callables_dict
-from espei.error_functions import calculate_activity_error, calculate_thermochemical_error, calculate_zpf_error
+from espei.error_functions import calculate_activity_error, calculate_thermochemical_error, calculate_zpf_error, generate_bounds, calculate_bounds_error
 
 
 def lnprob(params, comps=None, dbf=None, phases=None, datasets=None,
            symbols_to_fit=None, phase_models=None, scheduler=None,
            massfuncs=None, massgradfuncs=None,
            callables=None, grad_callables=None, hess_callables=None,
-           thermochemical_callables=None,
+           thermochemical_callables=None, bounds=None,
            ):
     """
     Returns the error from multiphase fitting as a log probability.
     """
     starttime = time.time()
     parameters = dict(zip(symbols_to_fit, params))
+    # want to check bounds first so we can hot path out
+    if bounds is not None:
+        bounds_error = calculate_bounds_error(params, bounds)
+        if np.isinf(bounds_error):
+            return -np.inf
     try:
         multi_phase_error = calculate_zpf_error(dbf, comps, phases, datasets, phase_models,
                                      parameters=parameters, scheduler=scheduler,
@@ -78,7 +83,7 @@ def generate_parameter_distribution(parameters, num_samples, std_deviation, dete
 
 def mcmc_fit(dbf, datasets, iterations=1000, save_interval=100, chains_per_parameter=2,
              chain_std_deviation=0.1, scheduler=None, tracefile=None, probfile=None,
-             restart_trace=None, deterministic=True, ):
+             restart_trace=None, deterministic=True, bounds=None):
     """
     Run Markov Chain Monte Carlo on the Database given datasets
 
@@ -166,11 +171,18 @@ def mcmc_fit(dbf, datasets, iterations=1000, save_interval=100, chains_per_param
         thermochemical_callables[prop].pop('massgradfuncs')
     logging.debug('Finished building phase models')
 
+    # setup bounds if necessary
+    if bounds is not None:
+        # check if bounds are not already formatted as lists of tuples
+        if not (isinstance(bounds, list) and isinstance(bounds[0], (list, tuple))):
+            bounds = generate_bounds(initial_parameters, bounds)
+
     # context for the log probability function
     error_context = {'comps': comps, 'dbf': dbf,
                      'phases': phases, 'phase_models': eq_callables['phase_models'],
                      'datasets': datasets, 'symbols_to_fit': symbols_to_fit,
                      'thermochemical_callables': thermochemical_callables,
+                     'bounds': bounds,
                      }
 
     error_context.update(**eq_callables)
