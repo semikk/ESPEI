@@ -12,7 +12,6 @@ phase_models = {
 }
 
 import numpy as np
-from sympy import Symbol, Eq
 
 # TODO (Brandon): these will eventually have to be a part of ESPEI datasets
 # the next parts will be a part of datasets that are parsed
@@ -36,32 +35,32 @@ def phase_fit_thermal_vacancies(dbf, phase_name, subl_model, site_ratios, datase
 
 # this part takes the grid of temperature values and Gibbs energy formation and
 # sublimation and calculates what the L parameters should be on the T grid
-L0 = Symbol('L0')
-L1 = Symbol('L1')
 
-L0_grid = []
-L1_grid = []
-for idx in range(T_grid.shape[0]):
+num_T = T_grid.shape[0]
+L0_grid = np.zeros(num_T)
+L1_grid = np.zeros(num_T)
+for idx in range(num_T):
     # solve two equations
-    eq_1 = Eq(L0+L1, G_f_grid[idx])
-    eq_2 = Eq(L0-L1, G_s_grid[idx])
-    result = sympy.solve([L0+L1-G_f_grid[idx], L0-L1-G_s_grid[idx]], L0, L1)
-    L0_grid.append(float(result[L0]))
-    L1_grid.append(float(result[L1]))
-#     result = sympy.solveset([eq_1, eq_2], L0, L1)
-
-L0_grid = np.array(L0_grid)
-L1_grid = np.array(L1_grid)
+    # L0+L1 = Gf
+    # L0-L1 = Gs
+    # A = [[1 1], [1 -1]]
+    # x = [[L0], [L1]]
+    # b = [[Gf], [Gs]]
+    A = np.array([[1, 1], [1, -1]])
+    b = np.array([[G_f_grid[idx]], [G_s_grid[idx]]])
+    result = np.dot(np.linalg.pinv(A), b)
+    L0_grid[idx] = result[0]
+    L1_grid[idx] = result[1]
 
 # this part fits the linear equation Ax=b where x is the temperature dependent terms for each interaction,
 # L0 first
-A = np.stack([np.ones(T_grid.size), T_grid]).T
-b = L0_grid.reshape((L0_grid.size, 1))
-L0_A, L0_B = np.matmul(np.linalg.pinv(A),b)
+A = np.stack([np.ones(num_T), T_grid]).T
+b = L0_grid.reshape((num_T, 1))
+L0_A, L0_B = np.matmul(np.linalg.pinv(A), b)
 
 # L1
-b = L1_grid.reshape((L1_grid.size, 1))
-L1_A, L1_B = np.matmul(np.linalg.pinv(A),b)
+b = L1_grid.reshape((num_T, 1))
+L1_A, L1_B = np.matmul(np.linalg.pinv(A), b)
 
 # TODO (Usman): add code to put these parameters in the database,
 # dbf.add_parameter()
