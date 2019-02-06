@@ -15,6 +15,7 @@ composition conditions to calculate chemical potentials at.
 """
 
 import operator, logging
+from copy import deepcopy
 from collections import defaultdict, OrderedDict
 
 import numpy as np
@@ -23,6 +24,8 @@ import tinydb
 
 from pycalphad import calculate, equilibrium, variables as v
 
+TRACE = 15  # TRACE logging level
+
 def _safe_index(items, index):
     try:
         return items[index]
@@ -30,18 +33,78 @@ def _safe_index(items, index):
         return None
 
 
-def get_zpf_data(comps, phases, datasets):
+def _mix_compositions(cond_key, this_comp, curr_idx, other_compositions, mix_fraction=0.001):
+    for idx, other_conds in enumerate(other_compositions):
+        if idx != curr_idx:
+            other_comp = other_conds[cond_key]
+            if not np.isnan(np.array(other_comp, dtype=np.float64)):
+                return this_comp*(1-mix_fraction) + other_comp*mix_fraction
+    return this_comp
+
+def _adjust_compositions(comp_dicts):
+    """
+    Adjust compositions of stoichiometric phases to be slightly off stoichiometry in the direction of the corresponding tieline point
+
+    Parameters
+    ----------
+    comp_dicts : list
+        Each comp dict is a tuple of ({composition condition dict}, phase_flags)
+
+    Returns
+    -------
+    list
+        Adjusted compositions
+    """
+    new_comp_dicts = []
+    other_compositions = [conds for conds, flag in comp_dicts]
+
+    for idx, (conds, phase_flag) in enumerate(comp_dicts):
+        new_conds = {}
+        for comp_var, composition in conds.items():
+            if not np.isnan(np.array(composition, dtype=np.float64)):
+                # this composition must be adjusted
+                # find the first non-nan composition that isn't
+                # this index and mix the two with 99.9% this composition
+                new_conds[comp_var] = _mix_compositions(comp_var, composition, idx, other_compositions)
+            else:
+                new_conds[comp_var] = composition
+        new_comp_dicts.append((new_conds, phase_flag))
+    return new_comp_dicts
+
+def phase_is_stoichiometric(dbf, phase_name, species):
+    """
+    Return True if phase has no internal degrees of freedom
+
+    Parameters
+    ----------
+    dbf : Database
+    phase_name : str
+    species : set
+
+    Returns
+    -------
+    bool
+
+    """
+    return not any((len(species.intersection(subl)) > 1 for subl in dbf.phases[phase_name].constituents))
+
+def get_zpf_data(dbf, comps, phases, datasets, adjust_stoichometric=True):
     """
     Return the ZPF data used in the calculation of ZPF error
 
     Parameters
     ----------
+    dbf : pycalphad.Database
+        Database to consider
     comps : list
         List of active component names
     phases : list
         List of phases to consider
     datasets : espei.utils.PickleableTinyDB
         Datasets that contain single phase data
+    adjust_stoichometric : bool
+        If True, any regions with all stoichiometric phases will create hyperplane
+        composition conditions that are slightly perturbed from the stoichiometric value.
 
     Returns
     -------
@@ -49,6 +112,7 @@ def get_zpf_data(comps, phases, datasets):
         List of data dictionaries with keys ``weight``, ``data_comps`` and
         ``phase_regions``. ``data_comps`` are the components for the data in
         question. ``phase_regions`` are the ZPF phases, state variables and compositions.
+
     """
     desired_data = datasets.search((tinydb.where('output') == 'ZPF') &
                                    (tinydb.where('components').test(lambda x: set(x).issubset(comps))) &
@@ -58,6 +122,8 @@ def get_zpf_data(comps, phases, datasets):
     for data in desired_data:
         payload = data['values']
         conditions = data['conditions']
+        species = {v.Species(c) for c in data['components']}
+        stoichiometric_phases = {ph for ph in phases if phase_is_stoichiometric(dbf, ph, species)}
         # create a dictionary of each set of phases containing a list of individual points on the tieline
         # individual tieline points are tuples of (conditions, {composition dictionaries})
         phase_regions = defaultdict(lambda: list())
@@ -69,15 +135,23 @@ def get_zpf_data(comps, phases, datasets):
                 continue
             # Need to sort 'p' here so we have the sorted ordering used in 'phase_key'
             # rp[3] optionally contains additional flags, e.g., "disordered", to help the solver
+            # each comp dict is a tuple of ({composition condition dict}, phase_flags)
             comp_dicts = [(dict(zip([v.X(x.upper()) for x in rp[1]], rp[2])), _safe_index(rp, 3))
                           for rp in sorted(p, key=operator.itemgetter(0))]
+            if len(set(phase_key).difference(stoichiometric_phases)) == 0 and adjust_stoichometric:
+                # all phases are stoichiometric, adjusting composition
+                hyperplane_comp_dicts = _adjust_compositions(comp_dicts)
+                logging.log(TRACE, 'All phases stoichiometric. Adjusting compositions from {} to {}'.format(comp_dicts, hyperplane_comp_dicts))
+            else:
+                hyperplane_comp_dicts = deepcopy(comp_dicts)
+
             cur_conds = {}
             for key, value in conditions.items():
                 value = np.atleast_1d(np.asarray(value))
                 if len(value) > 1:
                     value = value[idx]
                 cur_conds[getattr(v, key)] = float(value)
-            phase_regions[phase_key].append((cur_conds, comp_dicts))
+            phase_regions[phase_key].append((cur_conds, comp_dicts, hyperplane_comp_dicts))
 
         data_dict = {
             'weight': data.get('weight', 1.0),
@@ -282,7 +356,7 @@ def calculate_zpf_error(dbf, comps, phases, datasets, phase_models, parameters=N
 
     """
     prob_error = 0.0
-    for data in get_zpf_data(comps, phases, datasets):
+    for data in get_zpf_data(dbf, comps, phases, datasets):
         phase_regions = data['phase_regions']
         data_comps = data['data_comps']
         weight = data['weight']
@@ -290,10 +364,10 @@ def calculate_zpf_error(dbf, comps, phases, datasets, phase_models, parameters=N
         # for each set of phases in equilibrium and their individual tieline points
         for region, region_eq in phase_regions.items():
             # for each tieline region conditions and compositions
-            for current_statevars, comp_dicts in region_eq:
+            for current_statevars, comp_dicts, hyperplane_comp_dicts in region_eq:
                 # a "region" is a set of phase equilibria
                 eq_str = "conds: ({}), comps: ({})".format(current_statevars, ', '.join(['{}: {}'.format(ph,c[0]) for ph, c in zip(region, comp_dicts)]))
-                target_hyperplane = estimate_hyperplane(dbf, data_comps, phases, current_statevars, comp_dicts, phase_models, parameters, callables=callables)
+                target_hyperplane = estimate_hyperplane(dbf, data_comps, phases, current_statevars, hyperplane_comp_dicts, phase_models, parameters, callables=callables)
                 if np.any(np.isnan(target_hyperplane)):
                     logging.warning('Found a NaN ZPF driving force. Equilibria: ({}), reference: {}. Target hyperplane: {}. If this data point consistently gives NaN, consider removing it.'.format(eq_str, dataset_ref, target_hyperplane))
                 # Now perform the equilibrium calculation for the isolated phases and add the result to the error record
