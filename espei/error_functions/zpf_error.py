@@ -55,6 +55,7 @@ def _adjust_compositions(comp_dicts):
     list
         Adjusted compositions
     """
+    # TODO: still doesn't work if [{stoichiometric: x}, {stoichiometric: null}]
     new_comp_dicts = []
     other_compositions = [conds for conds, flag in comp_dicts]
 
