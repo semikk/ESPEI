@@ -33,45 +33,6 @@ def _safe_index(items, index):
         return None
 
 
-def _mix_compositions(cond_key, this_comp, curr_idx, other_compositions, mix_fraction=0.001):
-    for idx, other_conds in enumerate(other_compositions):
-        if idx != curr_idx:
-            other_comp = other_conds[cond_key]
-            if not np.isnan(np.array(other_comp, dtype=np.float64)):
-                return this_comp*(1-mix_fraction) + other_comp*mix_fraction
-    return this_comp
-
-def _adjust_compositions(comp_dicts):
-    """
-    Adjust compositions of stoichiometric phases to be slightly off stoichiometry in the direction of the corresponding tieline point
-
-    Parameters
-    ----------
-    comp_dicts : list
-        Each comp dict is a tuple of ({composition condition dict}, phase_flags)
-
-    Returns
-    -------
-    list
-        Adjusted compositions
-    """
-    # TODO: still doesn't work if [{stoichiometric: x}, {stoichiometric: null}]
-    new_comp_dicts = []
-    other_compositions = [conds for conds, flag in comp_dicts]
-
-    for idx, (conds, phase_flag) in enumerate(comp_dicts):
-        new_conds = {}
-        for comp_var, composition in conds.items():
-            if not np.isnan(np.array(composition, dtype=np.float64)):
-                # this composition must be adjusted
-                # find the first non-nan composition that isn't
-                # this index and mix the two with 99.9% this composition
-                new_conds[comp_var] = _mix_compositions(comp_var, composition, idx, other_compositions)
-            else:
-                new_conds[comp_var] = composition
-        new_comp_dicts.append((new_conds, phase_flag))
-    return new_comp_dicts
-
 def phase_is_stoichiometric(dbf, phase_name, species):
     """
     Return True if phase has no internal degrees of freedom
@@ -89,7 +50,7 @@ def phase_is_stoichiometric(dbf, phase_name, species):
     """
     return not any((len(species.intersection(subl)) > 1 for subl in dbf.phases[phase_name].constituents))
 
-def get_zpf_data(dbf, comps, phases, datasets, adjust_stoichometric=True):
+def get_zpf_data(dbf, comps, phases, datasets, skip_stoichiometric=True):
     """
     Return the ZPF data used in the calculation of ZPF error
 
@@ -103,9 +64,8 @@ def get_zpf_data(dbf, comps, phases, datasets, adjust_stoichometric=True):
         List of phases to consider
     datasets : espei.utils.PickleableTinyDB
         Datasets that contain single phase data
-    adjust_stoichometric : bool
-        If True, any regions with all stoichiometric phases will create hyperplane
-        composition conditions that are slightly perturbed from the stoichiometric value.
+    skip_stoichometric : bool
+        If True, any regions with all stoichiometric regions will skip.
 
     Returns
     -------
@@ -139,9 +99,9 @@ def get_zpf_data(dbf, comps, phases, datasets, adjust_stoichometric=True):
             # each comp dict is a tuple of ({composition condition dict}, phase_flags)
             comp_dicts = [(dict(zip([v.X(x.upper()) for x in rp[1]], rp[2])), _safe_index(rp, 3))
                           for rp in sorted(p, key=operator.itemgetter(0))]
-            if len(set(phase_key).difference(stoichiometric_phases)) == 0 and adjust_stoichometric:
-                # all phases are stoichiometric, adjusting composition
-                hyperplane_comp_dicts = _adjust_compositions(comp_dicts)
+            if len(set(phase_key).difference(stoichiometric_phases)) == 0 and skip_stoichiometric:
+                # all phases are stoichiometric, skip this region
+                continue
                 logging.log(TRACE, 'All phases stoichiometric. Adjusting compositions from {} to {}'.format(comp_dicts, hyperplane_comp_dicts))
             else:
                 hyperplane_comp_dicts = deepcopy(comp_dicts)
